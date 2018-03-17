@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"testing"
+	"fmt"
 )
 
 var (
@@ -133,6 +134,8 @@ func TestBig128(t *testing.T) {
 	Fast(bytes.NewReader(dataIn), out, networks)
 	result1 := out.String()
 	// result1 := ""
+
+	fmt.Println(result1)
 
 	if result1 != string(dataResult) {
 		t.Errorf("Results not equal")
