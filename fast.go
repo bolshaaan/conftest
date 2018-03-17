@@ -6,10 +6,9 @@ import (
 	"strings"
 	"encoding/json"
 	"sync"
-	"io/ioutil"
-	"bytes"
 	"regexp"
 	"sort"
+	"bufio"
 )
 
 // глобальные переменные запрещены
@@ -118,82 +117,147 @@ func Fast(in io.Reader, out io.Writer, networks []string) {
 	browserRegex, _ := regexp.Compile(`Chrome/(60.0.3112.90|52.0.2743.116|57.0.2987.133)`)
 
 	nwrks := make([]Network, 0, len(networks) )
-	var logs Logs
+	//var logs Logs
 
-	wg := &sync.WaitGroup{}
-	wg.Add(2)
+	//wg := &sync.WaitGroup{}
+	//wg.Add(1)
 
-	go func(wg *sync.WaitGroup) {
-		defer wg.Done()
+	//go func(wg *sync.WaitGroup) {
+	//	defer wg.Done()
 		for _, nw := range networks {
 			ip, ipMask, _ := ParseCIDR(nw)
 			nwrks = append(nwrks, Network{  ip: ip, mask: ipMask  })
 		}
-	}(wg)
+	//}(wg)
+	//wg.Wait()
 
-	go func(wg *sync.WaitGroup) {
-		defer wg.Done()
+	//go func(wg *sync.WaitGroup) {
+	//	defer wg.Done()
+	//
+	//	all, _ := ioutil.ReadAll(in)
+	//
+	//	all = bytes.Replace(all, []byte("\n"), []byte(","), -1)
+	//	all = all[:len(all)-1]
+	//
+	//	//all := []byte( "{") , all...,  []byte("}")
+	//	allr := append(  []byte( "["), all...)
+	//	allr = append(  allr,  byte(']') )
+	//	fmt.Println(string(allr))
+	//
+	//
+	//	logs := make(Logs, 0)
+	//	 json.Unmarshal(allr, logs)
+	//	//panic(err)
+	//	fmt.Println(  logs )
+	//
+	//
+	//	////logStr := strings.Split(string(all), "\n")
+	//	//for _, v := range bytes.Split(all, []byte("\n")) {
+	//	//	if len(v) == 0  {
+	//	//		continue
+	//	//	}
+	//	//
+	//	//	raw := &Log{}
+	//	//	json.Unmarshal(v, raw)
+	//	//	logs = append(logs, raw)
+	//	//}
+	//
+	//}(wg)
 
-		all, _ := ioutil.ReadAll(in)
-		//logStr := strings.Split(string(all), "\n")
-
-		for _, v := range bytes.Split(all, []byte("\n")) {
-			if len(v) == 0  {
-				continue
-			}
-
-			raw := &Log{}
-			json.Unmarshal(v, raw)
-			logs = append(logs, raw)
-		}
-
-	}(wg)
-
-	wg.Wait()
 
 	//comp, _ := regexp.Compile(`hits\"\:(\[(\"\d+\.\d+\.\d+\.\d+\",{0,1})+\])`)
 	//comp, _ := regexp.Compile(`hits\"\:\[(\"\d+\.\d+\.\d+\.\d+\",{0,1})+.*\]`)
 	//logs := strings.Split(string(all), "\n")
 
 	var total = 0
-	messages := make(chan []respos)
-	waitchn := make(chan []respos)
+	messages := make(chan *respos)
+	waitchn := make(chan []*respos)
+	tasks := make(chan *Task, 4)
 
-	batch := len(logs) / 2 + 1
-	wg2 := &sync.WaitGroup{}
+	//batch := len(logs) / 2
+	//if batch == 0 {
+	//	batch = 1
+	//}
+	//wg2 := &sync.WaitGroup{}
 
-	offset := 0
-	for logs != nil && len(logs) > 0  {
-		wg.Add(1)
-
-		var bbatch Logs
-		if len(logs) > batch {
-			bbatch = logs[:batch]
-			logs = logs[batch:]
-		} else {
-			bbatch = logs
-			logs = nil
-		}
-
-		wg2.Add(1)
-		go solve(bbatch, browserRegex, nwrks, nil, wg2, messages, offset)
-		offset += len(bbatch)
-	}
-
-	go func(messages chan []respos, waitchan chan []respos) {
-		res  := make([]respos, 0, 100)
+	go func(messages chan *respos, waitchan chan []*respos) {
+		res  := make([]*respos, 0, 1000)
 		for r := range messages {
-			res = append(res, r...)
+			res = append(res, r)
 		}
+		sort.Sort(  ByLex(res) )
 		waitchan <- res
 	}(messages, waitchn)
 
+	wg2 := &sync.WaitGroup{}
+
+	for  i := 0; i < 8; i++ {
+		wg2.Add(1)
+		go solve(tasks, browserRegex, nwrks, messages, wg2)
+	}
+
+
+	re := bufio.NewReader(in)
+
+	pos := 0
+	for true {
+		b, err := re.ReadBytes('\n')
+		if err != nil {
+			break
+		}
+
+		if len(b) == 0  {
+			continue
+		}
+
+		//tasks <- &Task{ LogStr: []byte( string(b) ), Pos: pos }
+		tasks <- &Task{ LogStr:  b, Pos: pos }
+
+		pos++
+	}
+
+
+	//all, _ := ioutil.ReadAll(in)
+	//
+	//
+	//for pos, v := range bytes.Split(all, []byte("\n")) {
+	//	if len(v) == 0  {
+	//		continue
+	//	}
+	//
+	//	tasks <- &Task{ LogStr: v, Pos: pos }
+	//
+	//	//raw := &Log{}
+	//	//json.Unmarshal(v, raw)
+	//	//logs = append(logs, raw)
+	//}
+	//}
+	close(tasks)
 	wg2.Wait()
 	close(messages)
+
 	res := <- waitchn
 
-	sort.Sort(  ByLex(res) )
-	//fmt.Println("BBBB: ", res)
+	//
+	//offset := 0
+	//for logs != nil && len(logs) > 0  {
+	//	wg.Add(1)
+	//
+	//	var bbatch Logs
+	//	if len(logs) > batch {
+	//		bbatch = logs[:batch]
+	//		logs = logs[batch:]
+	//	} else {
+	//		bbatch = logs
+	//		logs = nil
+	//	}
+	//
+	//	wg2.Add(1)
+	//	go solve(bbatch, browserRegex, nwrks, wg2, messages, offset)
+	//	offset += len(bbatch)
+	//}
+
+
 	total = len(res)
 	var str string
 	if len(res) == 0 {
@@ -216,20 +280,23 @@ type respos struct {
 	pos int
 }
 
-type ByLex []respos
+type ByLex []*respos
 func (a ByLex) Len() int           { return len(a) }
 func (a ByLex) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByLex) Less(i, j int) bool { return a[i].pos < a[j].pos }
 
-
-func solve (logs Logs, browserRegex *regexp.Regexp, nwrks []Network, res []string, waitg *sync.WaitGroup, messages chan []respos, offset int) {
+func solve (tasks chan *Task, browserRegex *regexp.Regexp, nwrks []Network, messages chan *respos, wg *sync.WaitGroup) {
+	defer wg.Done()
 	//comp, _ := regexp.Compile(`hits\"\:\[(.*)\]`)
-	defer waitg.Done()
 
-	var res2 []respos
+	//var res2 []respos
 
-	var total int
-	for logPos, log := range logs {
+	//for logPos, log := range logs {
+	for t := range tasks {
+
+		log := &Log{}
+		json.Unmarshal(t.LogStr, log)
+
 		//if len(log) == 0 {continue}
 		//b := comp.FindAllStringSubmatch(log, -1)
 		//addrs := strings.Split(b[0][1], ",")
@@ -246,6 +313,11 @@ func solve (logs Logs, browserRegex *regexp.Regexp, nwrks []Network, res []strin
 				if browserRegex.MatchString(br) {
 					browserCount++
 				}
+
+				if browserCount >= 3 {
+					break
+				}
+
 			}
 		}(wg)
 
@@ -286,17 +358,20 @@ func solve (logs Logs, browserRegex *regexp.Regexp, nwrks []Network, res []strin
 		wg.Wait()
 
 		if ipCount >= 3 && browserCount >= 3 {
-			total++
-
 			part := strings.Split(log.Email, "@")
-			res2 = append(res2, respos{  s: fmt.Sprintf("[%d] %s <%s [at] %s>", offset + logPos + 1, log.Name, part[0], part[1]), pos: offset + logPos  } )
+			//res2 = append(res2, respos{  s: fmt.Sprintf("[%d] %s <%s [at] %s>", offset + logPos + 1, log.Name, part[0], part[1]), pos: offset + logPos  } )
+
+			messages <- &respos{ s: fmt.Sprintf("[%d] %s <%s [at] %s>", t.Pos + 1, log.Name, part[0], part[1]), pos: t.Pos  }
 		}
 	}
 
-	messages <- res2
+	//messages <- res2
 }
 
-
+type Task struct {
+	LogStr []byte
+	Pos int
+}
 
 type Log struct {
 	Browsers []string `json:"browsers"`
@@ -307,6 +382,8 @@ type Log struct {
 	Job      string   `json:"job"`
 	Name     string   `json:"name"`
 	Phone    string   `json:"phone"`
+
+	Pos int
 }
 
 type Logs []*Log
